@@ -64,6 +64,34 @@ Run live API verification:
 uv run python scripts/test_live_api.py
 ```
 
+### Testing the rewards alert
+
+The "no rewards recorded" alert runs in the background. To verify it without waiting for the normal interval:
+
+1. **Check status** (count in window and whether an alert would fire):
+   ```bash
+   curl -s http://localhost:8080/v1/test/rewards-alert-status
+   ```
+   Returns `rewards_count_in_window`, `window_hours`, and `would_alert` (true when count is 0).
+
+2. **Trigger an alert once** (sends Discord/email if no rewards in window):
+   ```bash
+   curl -X POST http://localhost:8080/v1/test/trigger-rewards-alert
+   ```
+   Use when `participant_rewards_metrics` has no rows in the last `REWARDS_ALERT_WINDOW_HOURS` (e.g. fresh DB or backdated data). Response shows whether email/webhook was sent.
+
+3. **Let the background task fire** with short intervals (e.g. in `config.env`):
+   ```bash
+   REWARDS_ALERT_WINDOW_HOURS=0.001
+   REWARDS_ALERT_GRACE_SECONDS=10
+   REWARDS_ALERT_CHECK_INTERVAL=15
+   ```
+   With an empty or backdated `participant_rewards_metrics`, the monitor will send an alert after the grace period, then again every `REWARDS_ALERT_REMINDER_INTERVAL` if still no data.
+
+### Chain/API unreachable alert
+
+When `get_current_epoch_stats()` fails N times in a row (no cached response), the backend sends "Chain/API unreachable" via Discord/email. Config: `EPOCH_FETCH_ALERT_CONSECUTIVE_THRESHOLD` (default 3), `EPOCH_FETCH_ALERT_REMINDER_INTERVAL` (default 3600s). Check status: `GET /v1/test/epoch-fetch-status` returns `consecutive_failures`, `alert_threshold`, and `would_alert`.
+
 ## API
 
 ### Base

@@ -21,6 +21,9 @@ services:
     build: ./backend
     env_file:
       - config.env
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - backend-cache:/app/cache
     labels:
@@ -56,6 +59,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-gonka_tracker}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./grafana/init_db.sql:/docker-entrypoint-initdb.d/01-init_db.sql:ro
     ports:
       - "5432:5432"
     restart: unless-stopped
@@ -82,7 +86,8 @@ services:
       - "traefik.http.routers.grafana.entrypoints=web,websecure"
       - "traefik.http.services.grafana.loadbalancer.server.port=3000"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

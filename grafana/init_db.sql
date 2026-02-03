@@ -62,12 +62,25 @@ CREATE TABLE IF NOT EXISTS participant_rewards (
 -- Create hypertable for rewards
 SELECT create_hypertable('participant_rewards', 'time', if_not_exists => TRUE);
 
+-- Participant rewards metrics (written by backend; used by Grafana rewards dashboard)
+CREATE TABLE IF NOT EXISTS participant_rewards_metrics (
+    time TIMESTAMPTZ NOT NULL,
+    node_address TEXT NOT NULL,
+    epoch_id INTEGER NOT NULL,
+    assigned_reward_gnk BIGINT,
+    claimed BOOLEAN,
+    PRIMARY KEY (time, node_address, epoch_id)
+);
+SELECT create_hypertable('participant_rewards_metrics', 'time', if_not_exists => TRUE);
+
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_node_metrics_address ON node_metrics(node_address);
 CREATE INDEX IF NOT EXISTS idx_node_metrics_epoch ON node_metrics(epoch_id);
 CREATE INDEX IF NOT EXISTS idx_network_metrics_epoch ON network_metrics(epoch_id);
 CREATE INDEX IF NOT EXISTS idx_participant_rewards_address ON participant_rewards(node_address);
 CREATE INDEX IF NOT EXISTS idx_participant_rewards_epoch ON participant_rewards(epoch_id);
+CREATE INDEX IF NOT EXISTS idx_participant_rewards_metrics_address ON participant_rewards_metrics(node_address);
+CREATE INDEX IF NOT EXISTS idx_participant_rewards_metrics_epoch ON participant_rewards_metrics(epoch_id);
 
 -- Verify tables were created
 SELECT tablename FROM pg_tables WHERE schemaname = 'public';

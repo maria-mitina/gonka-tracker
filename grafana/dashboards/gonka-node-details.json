@@ -23,7 +23,7 @@
         },
         "datasource": {
           "type": "postgres",
-          "uid": "PostgreSQL"
+          "name": "PostgreSQL"
         },
         "definition": "SELECT DISTINCT node_address FROM node_metrics WHERE $__timeFilter(time) ORDER BY node_address",
         "hide": 0,
@@ -59,7 +59,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -132,7 +132,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -205,7 +205,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -268,7 +268,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -337,7 +337,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",

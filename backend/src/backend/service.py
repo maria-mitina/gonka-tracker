@@ -52,9 +52,10 @@ def _extract_ml_nodes_map(ml_nodes_data: List[Dict]) -> Dict[str, int]:
 
 
 class InferenceService:
-    def __init__(self, client: GonkaClient, cache_db: CacheDB):
+    def __init__(self, client: GonkaClient, cache_db: CacheDB, postgres_db=None):
         self.client = client
         self.cache_db = cache_db
+        self.postgres_db = postgres_db
         self.current_epoch_id: Optional[int] = None
         self.current_epoch_data: Optional[InferenceResponse] = None
         self.last_fetch_time: Optional[float] = None
@@ -305,6 +306,18 @@ class InferenceService:
                 participants_stats=stats_for_saving
             )
             
+            if self.postgres_db:
+                await self.postgres_db.save_stats_batch(
+                    epoch_id=epoch_id,
+                    height=height,
+                    participants_stats=stats_for_saving
+                )
+                try:
+                    await self.postgres_db.write_node_metrics(response.dict())
+                    await self.postgres_db.write_network_metrics(response.dict())
+                except Exception as e:
+                    logger.warning(f"Failed to write metrics to PostgreSQL: {e}")
+            
             self.current_epoch_id = epoch_id
             self.current_epoch_data = response
             self.last_fetch_time = current_time
@@ -439,6 +452,12 @@ class InferenceService:
                 height=target_height,
                 participants_stats=stats_for_saving
             )
+            if self.postgres_db:
+                await self.postgres_db.save_stats_batch(
+                    epoch_id=epoch_id,
+                    height=target_height,
+                    participants_stats=stats_for_saving
+                )
             
             if height is None and not is_finished:
                 await self.cache_db.mark_epoch_finished(epoch_id, target_height)
@@ -573,6 +592,8 @@ class InferenceService:
                 })
             
             await self.cache_db.save_jail_status_batch(epoch_id, jail_statuses)
+            if self.postgres_db:
+                await self.postgres_db.save_jail_status_batch(epoch_id, jail_statuses)
             logger.info(f"Cached jail statuses for {len(jail_statuses)} participants in epoch {epoch_id}")
             
         except Exception as e:
@@ -599,6 +620,8 @@ class InferenceService:
                 })
             
             await self.cache_db.save_node_health_batch(health_statuses)
+            if self.postgres_db:
+                await self.postgres_db.save_node_health_batch(health_statuses)
             logger.info(f"Cached health statuses for {len(health_statuses)} participants")
             
         except Exception as e:
@@ -889,6 +912,8 @@ class InferenceService:
             
             if rewards_to_save:
                 await self.cache_db.save_reward_batch(rewards_to_save)
+                if self.postgres_db:
+                    await self.postgres_db.write_participant_rewards_metrics(rewards_to_save)
                 logger.info(f"Saved {len(rewards_to_save)} reward records")
             
         except Exception as e:
@@ -1068,17 +1093,21 @@ class InferenceService:
                     logger.debug(f"Could not fetch reward for {participant_id} in epoch {epoch_id}: {e}")
                     continue
             
-            if total_ugnk == 0 and fetched_count > 0:
-                logger.warning(f"Epoch {epoch_id} rewards calculation returned 0 for all {fetched_count} participants - rewards may not be available yet, skipping cache")
-                return
-            
             if rewards_batch:
                 await self.cache_db.save_reward_batch(rewards_batch)
+                if self.postgres_db:
+                    await self.postgres_db.write_participant_rewards_metrics(rewards_batch)
                 logger.debug(f"Cached {len(rewards_batch)} participant rewards during total calculation")
+            
+            if total_ugnk == 0 and fetched_count > 0:
+                logger.warning(f"Epoch {epoch_id} rewards calculation returned 0 for all {fetched_count} participants - rewards may not be available yet, skipping total cache")
+                return
             
             total_gnk = total_ugnk // 1_000_000_000
             
             await self.cache_db.save_epoch_total_rewards(epoch_id, total_gnk)
+            if self.postgres_db:
+                await self.postgres_db.save_epoch_total_rewards(epoch_id, total_gnk)
             logger.info(f"Calculated and cached total rewards for epoch {epoch_id}: {total_gnk} GNK from {fetched_count}/{len(participants)} participants ({participants_with_rewards} with rewards)")
             
         except Exception as e:

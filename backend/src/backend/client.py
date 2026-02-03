@@ -72,7 +72,26 @@ class GonkaClient:
     async def get_latest_height(self) -> int:
         data = await self._make_request("/chain-rpc/status")
         return int(data["result"]["sync_info"]["latest_block_height"])
-    
+
+    async def get_status_sync_info(self) -> Dict[str, Any]:
+        """Return sync_info from chain /status (one RPC). Includes latest_block_height and latest_block_time (Unix secs, or None)."""
+        data = await self._make_request("/chain-rpc/status")
+        sync = data.get("result", {}).get("sync_info", {})
+        height = int(sync.get("latest_block_height", 0))
+        block_time = None
+        raw_time = sync.get("latest_block_time")
+        if raw_time:
+            try:
+                from datetime import datetime
+                if isinstance(raw_time, (int, float)):
+                    block_time = float(raw_time)
+                else:
+                    dt = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                    block_time = dt.timestamp()
+            except (TypeError, ValueError):
+                pass
+        return {"latest_block_height": height, "latest_block_time": block_time}
+
     async def discover_urls(self) -> List[str]:
         try:
             participants_data = await self.get_current_epoch_participants()

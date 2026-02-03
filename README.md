@@ -90,7 +90,3 @@ cd frontend
 npm run dev
 ```
 
-## Repository
-
-https://github.com/gonka-ai/gonka-tracker
-

@@ -24,7 +24,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -35,7 +35,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -59,7 +59,7 @@
               "model": {
                 "datasource": {
                   "type": "postgres",
-                  "uid": "PostgreSQL"
+                  "name": "PostgreSQL"
                 },
                 "editorMode": "code",
                 "format": "table",
@@ -128,8 +128,7 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         }
       },
       "options": {
@@ -161,7 +160,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -184,8 +183,7 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         }
       },
       "options": {
@@ -217,7 +215,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -240,8 +238,7 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         }
       },
       "options": {
@@ -273,7 +270,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -317,8 +314,7 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         }
       },
       "options": {
@@ -350,7 +346,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -394,8 +390,7 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         }
       },
       "options": {
@@ -426,7 +421,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -470,8 +465,7 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         }
       },
       "options": {
@@ -502,7 +496,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -560,7 +554,7 @@
         {
           "datasource": {
             "type": "postgres",
-            "uid": "PostgreSQL"
+            "name": "PostgreSQL"
           },
           "editorMode": "code",
           "format": "table",
@@ -583,8 +577,7 @@
                 "value": null
               }
             ]
-          },
-          "unit": "short"
+          }
         }
       },
       "options": {

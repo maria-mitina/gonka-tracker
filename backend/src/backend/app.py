@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.router import router, set_inference_service
 from backend.client import GonkaClient
 from backend.database import CacheDB
+from backend.postgres_db import PostgresDB
 from backend.service import InferenceService
 from backend.email_alert import EmailAlert
 from backend.webhook_alert import WebhookAlert
@@ -33,6 +34,12 @@ POLL_CONFIRMATION_DATA_INTERVAL = int(os.getenv("POLL_CONFIRMATION_DATA_INTERVAL
 BLOCK_HEIGHT_CHECK_INTERVAL = int(os.getenv("BLOCK_HEIGHT_CHECK_INTERVAL", "30"))
 BLOCK_HEIGHT_ALERT_THRESHOLD = int(os.getenv("BLOCK_HEIGHT_ALERT_THRESHOLD", "120"))
 BLOCK_HEIGHT_REMINDER_INTERVAL = int(os.getenv("BLOCK_HEIGHT_REMINDER_INTERVAL", "300"))
+REWARDS_ALERT_CHECK_INTERVAL = int(os.getenv("REWARDS_ALERT_CHECK_INTERVAL", "600"))
+REWARDS_ALERT_WINDOW_HOURS = float(os.getenv("REWARDS_ALERT_WINDOW_HOURS", "24"))
+REWARDS_ALERT_REMINDER_INTERVAL = int(os.getenv("REWARDS_ALERT_REMINDER_INTERVAL", "3600"))
+REWARDS_ALERT_GRACE_SECONDS = int(os.getenv("REWARDS_ALERT_GRACE_SECONDS", "1800"))
+EPOCH_FETCH_ALERT_CONSECUTIVE_THRESHOLD = int(os.getenv("EPOCH_FETCH_ALERT_CONSECUTIVE_THRESHOLD", "3"))
+EPOCH_FETCH_ALERT_REMINDER_INTERVAL = int(os.getenv("EPOCH_FETCH_ALERT_REMINDER_INTERVAL", "3600"))
 
 background_task = None
 jail_polling_task = None
@@ -46,22 +53,52 @@ models_api_polling_task = None
 timeline_polling_task = None
 confirmation_polling_task = None
 block_height_monitoring_task = None
+rewards_monitoring_task = None
 inference_service_instance = None
 email_alert_instance = None
 webhook_alert_instance = None
 block_height_test_mode = False
 block_height_test_fixed_height = None
+consecutive_epoch_fetch_failures = 0
+last_epoch_fetch_alert_time = None
 
 
 async def poll_current_epoch():
+    import time
+    global consecutive_epoch_fetch_failures, last_epoch_fetch_alert_time, email_alert_instance, webhook_alert_instance
+
     while True:
         try:
             if inference_service_instance:
                 await inference_service_instance.get_current_epoch_stats(reload=True)
+                consecutive_epoch_fetch_failures = 0
+                last_epoch_fetch_alert_time = None
                 logger.info("Background polling: fetched current epoch stats")
         except Exception as e:
-            logger.error(f"Background polling error: {e}")
-        
+            logger.error("Background polling error: %s", e)
+            consecutive_epoch_fetch_failures += 1
+            if consecutive_epoch_fetch_failures >= EPOCH_FETCH_ALERT_CONSECUTIVE_THRESHOLD:
+                current_time = time.time()
+                time_since_last_alert = current_time - last_epoch_fetch_alert_time if last_epoch_fetch_alert_time else float("inf")
+                should_send = last_epoch_fetch_alert_time is None or time_since_last_alert >= EPOCH_FETCH_ALERT_REMINDER_INTERVAL
+                if should_send:
+                    is_reminder = last_epoch_fetch_alert_time is not None
+                    alert_type = "Reminder: " if is_reminder else ""
+                    subject = f"{alert_type}Alert: Chain/API unreachable"
+                    message = (
+                        f"get_current_epoch_stats() has failed {consecutive_epoch_fetch_failures} times in a row.\n\n"
+                        f"Last error: {e}\n\n"
+                        f"Threshold: {EPOCH_FETCH_ALERT_CONSECUTIVE_THRESHOLD} consecutive failures\n"
+                        f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
+                    )
+                    alert_sent = False
+                    if email_alert_instance and await email_alert_instance.send_alert(subject, message):
+                        alert_sent = True
+                    if webhook_alert_instance and await webhook_alert_instance.send_alert(subject, message):
+                        alert_sent = True
+                    if alert_sent:
+                        last_epoch_fetch_alert_time = current_time
+                        logger.warning("Alert sent: Chain/API unreachable (%s consecutive failures)", consecutive_epoch_fetch_failures)
         await asyncio.sleep(POLL_CURRENT_EPOCH_INTERVAL)
 
 
@@ -216,23 +253,26 @@ async def poll_confirmation_data():
 
 async def monitor_block_height():
     import time
-    
+
     await asyncio.sleep(10)
-    
+
     last_height = None
     last_height_time = None
     last_alert_time = None
-    
+
     while True:
         try:
             if inference_service_instance:
                 if block_height_test_mode and block_height_test_fixed_height is not None:
                     current_height = block_height_test_fixed_height
+                    latest_block_time = None
                     logger.debug(f"Test mode: Using fixed height {current_height}")
                 else:
-                    current_height = await inference_service_instance.client.get_latest_height()
+                    sync_info = await inference_service_instance.client.get_status_sync_info()
+                    current_height = sync_info["latest_block_height"]
+                    latest_block_time = sync_info.get("latest_block_time")
                 current_time = time.time()
-                
+
                 if last_height is not None:
                     if current_height > last_height:
                         old_height = last_height
@@ -241,61 +281,109 @@ async def monitor_block_height():
                         last_alert_time = None
                         logger.info(f"Block height increased: {old_height} -> {current_height}")
                     else:
-                        time_since_last_growth = current_time - last_height_time if last_height_time else 0
-                        time_since_last_alert = current_time - last_alert_time if last_alert_time else float('inf')
-                        
+                        if latest_block_time is not None:
+                            time_since_last_block = current_time - latest_block_time
+                        else:
+                            time_since_last_block = current_time - last_height_time if last_height_time else 0
+                        time_since_last_alert = current_time - last_alert_time if last_alert_time else float("inf")
+
                         should_send_alert = False
                         is_reminder = False
-                        
-                        if time_since_last_growth >= BLOCK_HEIGHT_ALERT_THRESHOLD:
+
+                        if time_since_last_block >= BLOCK_HEIGHT_ALERT_THRESHOLD:
                             if last_alert_time is None:
                                 should_send_alert = True
-                                logger.info(f"Block height unchanged at {current_height} for {int(time_since_last_growth)}s - sending initial alert")
+                                logger.info("Time since last block %ss (height %s) - sending initial alert", int(time_since_last_block), current_height)
                             elif time_since_last_alert >= BLOCK_HEIGHT_REMINDER_INTERVAL:
                                 should_send_alert = True
                                 is_reminder = True
-                                logger.info(f"Block height still unchanged at {current_height} for {int(time_since_last_growth)}s - sending reminder alert")
-                        
+                                logger.info("Time since last block %ss (height %s) - sending reminder alert", int(time_since_last_block), current_height)
+
                         if should_send_alert:
                             alert_type = "Reminder: " if is_reminder else ""
-                            subject = f"{alert_type}Alert: No Block Height Growth Detected"
+                            subject = f"{alert_type}Alert: Time Since Last Block"
                             message = (
-                                f"Block height has not increased for {int(time_since_last_growth)} seconds.\n\n"
+                                f"Time since last block: {int(time_since_last_block)} seconds.\n\n"
                                 f"Current block height: {current_height}\n"
-                                f"Last growth detected: {int(time_since_last_growth)} seconds ago\n"
+                                f"Threshold: {BLOCK_HEIGHT_ALERT_THRESHOLD} seconds\n"
                                 f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
                             )
-                            
+
                             alert_sent_any = False
                             if email_alert_instance:
                                 if await email_alert_instance.send_alert(subject, message):
                                     alert_sent_any = True
-                            
+
                             if webhook_alert_instance:
                                 if await webhook_alert_instance.send_alert(subject, message):
                                     alert_sent_any = True
-                            
+
                             if alert_sent_any:
                                 last_alert_time = current_time
-                                logger.warning(f"Alert sent: No block height growth for {int(time_since_last_growth)} seconds")
+                                logger.warning("Alert sent: Time since last block %s seconds", int(time_since_last_block))
                             else:
-                                logger.warning(f"No alert channels configured: Block height stuck at {current_height} for {int(time_since_last_growth)} seconds")
+                                logger.warning("No alert channels configured: Time since last block %ss at height %s", int(time_since_last_block), current_height)
                         else:
-                            logger.debug(f"Block height unchanged at {current_height} for {int(time_since_last_growth)}s (threshold: {BLOCK_HEIGHT_ALERT_THRESHOLD}s, last alert: {int(time_since_last_alert)}s ago)")
+                            logger.debug("Time since last block %ss at height %s (threshold: %ss)", int(time_since_last_block), current_height, BLOCK_HEIGHT_ALERT_THRESHOLD)
                 else:
                     last_height = current_height
                     last_height_time = current_time
-                    logger.info(f"Initial block height: {current_height}")
-                    
+                    logger.info("Initial block height: %s", current_height)
+
         except Exception as e:
-            logger.error(f"Block height monitoring error: {e}")
-        
+            logger.error("Block height monitoring error: %s", e)
+
         await asyncio.sleep(BLOCK_HEIGHT_CHECK_INTERVAL)
+
+
+async def monitor_rewards():
+    import time
+    global postgres_db_instance, email_alert_instance, webhook_alert_instance
+    await asyncio.sleep(REWARDS_ALERT_GRACE_SECONDS)
+    last_alert_time = None
+    startup_time = time.time()
+    while True:
+        try:
+            if postgres_db_instance and (time.time() - startup_time) >= REWARDS_ALERT_GRACE_SECONDS:
+                count = await postgres_db_instance.count_rewards_since_hours(REWARDS_ALERT_WINDOW_HOURS)
+                current_time = time.time()
+                time_since_last_alert = current_time - last_alert_time if last_alert_time else float("inf")
+                if count == 0:
+                    should_send = False
+                    is_reminder = False
+                    if last_alert_time is None:
+                        should_send = True
+                        logger.info("No reward records in the last %s hours - sending initial alert", REWARDS_ALERT_WINDOW_HOURS)
+                    elif time_since_last_alert >= REWARDS_ALERT_REMINDER_INTERVAL:
+                        should_send = True
+                        is_reminder = True
+                        logger.info("No reward records in the last %s hours - sending reminder alert", REWARDS_ALERT_WINDOW_HOURS)
+                    if should_send:
+                        alert_type = "Reminder: " if is_reminder else ""
+                        subject = f"{alert_type}Alert: No Rewards Recorded"
+                        message = (
+                            f"No participant rewards have been recorded in the last {REWARDS_ALERT_WINDOW_HOURS} hours.\n\n"
+                            f"Check rewards polling and chain API.\n"
+                            f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
+                        )
+                        alert_sent = False
+                        if email_alert_instance and await email_alert_instance.send_alert(subject, message):
+                            alert_sent = True
+                        if webhook_alert_instance and await webhook_alert_instance.send_alert(subject, message):
+                            alert_sent = True
+                        if alert_sent:
+                            last_alert_time = current_time
+                            logger.warning("Alert sent: No rewards in the last %s hours", REWARDS_ALERT_WINDOW_HOURS)
+                else:
+                    last_alert_time = None
+        except Exception as e:
+            logger.error("Rewards monitoring error: %s", e)
+        await asyncio.sleep(REWARDS_ALERT_CHECK_INTERVAL)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global background_task, jail_polling_task, health_polling_task, rewards_polling_task, warm_keys_polling_task, hardware_nodes_polling_task, epoch_total_rewards_polling_task, participant_inferences_polling_task, models_api_polling_task, timeline_polling_task, confirmation_polling_task, block_height_monitoring_task, inference_service_instance, email_alert_instance, webhook_alert_instance
+    global background_task, jail_polling_task, health_polling_task, rewards_polling_task, warm_keys_polling_task, hardware_nodes_polling_task, epoch_total_rewards_polling_task, participant_inferences_polling_task, models_api_polling_task, timeline_polling_task, confirmation_polling_task, block_height_monitoring_task, rewards_monitoring_task, inference_service_instance, email_alert_instance, webhook_alert_instance, postgres_db_instance
     
     inference_urls = os.getenv("INFERENCE_URLS", "http://node2.gonka.ai:8000").split(",")
     inference_urls = [url.strip() for url in inference_urls]
@@ -308,12 +396,23 @@ async def lifespan(app: FastAPI):
     logger.info(f"Polling intervals (s): warm_keys={POLL_WARM_KEYS_INTERVAL}, hardware_nodes={POLL_HARDWARE_NODES_INTERVAL}, total_rewards={POLL_EPOCH_TOTAL_REWARDS_INTERVAL}, inferences={POLL_PARTICIPANT_INFERENCES_INTERVAL}, models_api={POLL_MODELS_API_INTERVAL}, timeline={POLL_TIMELINE_INTERVAL}, confirmation_data={POLL_CONFIRMATION_DATA_INTERVAL}, block_height={BLOCK_HEIGHT_CHECK_INTERVAL}")
     logger.info(f"Polling batch sizes: warm_keys={POLL_WARM_KEYS_BATCH_SIZE}, hardware_nodes={POLL_HARDWARE_NODES_BATCH_SIZE}")
     logger.info(f"Block height alert threshold: {BLOCK_HEIGHT_ALERT_THRESHOLD}s, reminder interval: {BLOCK_HEIGHT_REMINDER_INTERVAL}s")
-    
+    logger.info(f"Rewards alert: check every {REWARDS_ALERT_CHECK_INTERVAL}s, window {REWARDS_ALERT_WINDOW_HOURS}h, reminder {REWARDS_ALERT_REMINDER_INTERVAL}s, grace {REWARDS_ALERT_GRACE_SECONDS}s")
+    logger.info(f"Epoch fetch alert: threshold {EPOCH_FETCH_ALERT_CONSECUTIVE_THRESHOLD} consecutive failures, reminder every {EPOCH_FETCH_ALERT_REMINDER_INTERVAL}s")
+
     cache_db = CacheDB(db_path)
     await cache_db.initialize()
     
+    postgres_db_instance = None
+    try:
+        postgres_db_instance = PostgresDB()
+        await postgres_db_instance.initialize()
+        logger.info("PostgreSQL database initialized for unified storage")
+    except Exception as e:
+        logger.warning(f"Failed to initialize PostgreSQL (metrics will not be written): {e}")
+        logger.warning("Continuing with SQLite cache only. Check PostgreSQL configuration.")
+    
     client = GonkaClient(base_urls=inference_urls)
-    inference_service_instance = InferenceService(client=client, cache_db=cache_db)
+    inference_service_instance = InferenceService(client=client, cache_db=cache_db, postgres_db=postgres_db_instance)
     email_alert_instance = EmailAlert()
     webhook_alert_instance = WebhookAlert()
     
@@ -331,6 +430,7 @@ async def lifespan(app: FastAPI):
     timeline_polling_task = asyncio.create_task(poll_timeline())
     confirmation_polling_task = asyncio.create_task(poll_confirmation_data())
     block_height_monitoring_task = asyncio.create_task(monitor_block_height())
+    rewards_monitoring_task = asyncio.create_task(monitor_rewards())
     logger.info("Background polling tasks started")
     
     yield
@@ -418,6 +518,17 @@ async def lifespan(app: FastAPI):
             await block_height_monitoring_task
         except asyncio.CancelledError:
             logger.info("Block height monitoring task cancelled")
+
+    if rewards_monitoring_task:
+        rewards_monitoring_task.cancel()
+        try:
+            await rewards_monitoring_task
+        except asyncio.CancelledError:
+            logger.info("Rewards monitoring task cancelled")
+
+    if postgres_db_instance:
+        await postgres_db_instance.close()
+        logger.info("PostgreSQL connection closed")
 
 
 app = FastAPI(lifespan=lifespan)
